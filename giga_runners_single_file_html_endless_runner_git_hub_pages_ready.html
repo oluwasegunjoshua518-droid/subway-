@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Giga Runners</title>
+  <style>
+    :root {
+      --bg:#0d0f1a;        /* sky */
+      --track:#1e2433;     /* track/background */
+      --lane:#242b3d;      /* lane tint */
+      --accent:#ffd63d;    /* coins */
+      --player:#36d7ff;    /* player color */
+      --obstacle:#ff6b6b;  /* obstacle color */
+      --ui:#ffffff;        /* UI text */
+      --shadow: rgba(0,0,0,.35);
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: radial-gradient(1000px 600px at 50% -200px, #1a1f2f 0%, var(--bg) 60%, #06070b 100%) fixed;
+      color: var(--ui);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    .wrap {
+      position: fixed; inset: 0; display: grid; place-items: center;
+    }
+
+    canvas {
+      width: min(100vw, 100vh * (16/9));
+      height: calc(min(100vw, 100vh * (16/9)) / (16/9));
+      border-radius: 18px;
+      box-shadow: 0 20px 60px var(--shadow), inset 0 0 0 1px rgba(255,255,255,.05);
+      background: linear-gradient(#0c1022 10%, #0b1020 35%, #0a0e1a 100%);
+      touch-action: none; /* allow custom gestures */
+    }
+
+    .hud {
+      position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 16px; align-items: center; user-select:none;
+      background: rgba(0,0,0,.25); padding: 8px 14px; border-radius: 999px;
+      box-shadow: 0 6px 24px var(--shadow), inset 0 0 0 1px rgba(255,255,255,.06);
+      backdrop-filter: blur(6px);
+      font-weight: 700; letter-spacing: .2px;
+    }
+
+    .hud .pill { display:flex; gap:8px; align-items:center; padding:6px 10px; border-radius: 999px; background: rgba(255,255,255,.06); }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .coin { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+    .dist { background: #7bd88f; box-shadow: 0 0 10px #7bd88f; }
+
+    .overlay {
+      position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
+    }
+    .card {
+      width: min(90vw, 520px);
+      background: rgba(10,12,22,.7);
+      border-radius: 20px; padding: 22px; text-align: center;
+      box-shadow: 0 20px 80px var(--shadow), inset 0 0 0 1px rgba(255,255,255,.06);
+      backdrop-filter: blur(8px);
+      pointer-events: auto;
+    }
+    .title { font-size: 28px; font-weight: 800; margin: 6px 0 12px; }
+    .subtitle { opacity:.9; margin-bottom: 16px; }
+    .btns { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
+    button {
+      border: 0; padding: 12px 16px; border-radius: 12px; cursor: pointer; font-weight: 700;
+      box-shadow: 0 8px 30px var(--shadow);
+    }
+    .primary { background: #7bd88f; }
+    .ghost { background: rgba(255,255,255,.12); color: var(--ui); }
+    kbd { background: rgba(255,255,255,.08); padding: 4px 6px; border-radius: 6px; }
+    a { color: #a6c8ff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game" width="960" height="540" aria-label="Giga Runners"></canvas>
+  </div>
+
+  <div class="hud" id="hud">
+    <div class="pill"><span class="dot coin"></span>Coins: <span id="coins">0</span></div>
+    <div class="pill"><span class="dot dist"></span>Distance: <span id="dist">0</span> m</div>
+  </div>
+
+  <div class="overlay" id="startOverlay">
+    <div class="card">
+      <div class="title">Giga Runners</div>
+      <div class="subtitle">Swipe or use <kbd>←</kbd><kbd>→</kbd> to change lanes, <kbd>↑</kbd> to jump, <kbd>↓</kbd> to slide. Collect coins, dodge obstacles, run far!</div>
+      <div class="btns">
+        <button class="primary" id="playBtn">Play</button>
+        <button class="ghost" id="howBtn">How to play</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="gameOver" style="display:none">
+    <div class="card">
+      <div class="title">Game Over</div>
+      <div class="subtitle">Distance: <b id="finalDist">0</b> m · Coins: <b id="finalCoins">0</b></div>
+      <div class="btns">
+        <button class="primary" id="restartBtn">Restart</button>
+        <button class="ghost" id="shareBtn">Share score</button>
+      </div>
+      <div style="margin-top:10px; opacity:.8; font-size:14px">Tip: Host this file on <a href="https://pages.github.com/" target="_blank" rel="noreferrer">GitHub Pages</a> for a free live link.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hudCoins = document.getElementById('coins');
+  const hudDist = document.getElementById('dist');
+  const startOverlay = document.getElementById('startOverlay');
+  const gameOverEl = document.getElementById('gameOver');
+  const finalDistEl = document.getElementById('finalDist');
+  const finalCoinsEl = document.getElementById('finalCoins');
+
+  const state = {
+    running: false,
+    gameOver: false,
+    t: 0,
+    speed: 8,           // world scroll speed
+    accel: 0.0009,      // gradual speed up
+    lanes: 3,
+    laneW: canvas.width / 3,
+    groundY: canvas.height * 0.8,
+    player: {
+      lane: 1,
+      x: canvas.width * 0.25,
+      y: 0, // vertical offset from ground (jump)
+      vy: 0,
+      w: 54,
+      h: 88,
+      isSliding: false,
+      slideT: 0,
+    },
+    coins: 0,
+    distance: 0,
+    obstacles: [],
+    pickups: [],
+    rngSeed: Math.floor(Math.random() * 1e9),
+  };
+
+  // Simple seeded RNG for deterministic runs (nice for testing)
+  function rand() {
+    // xorshift32
+    let x = state.rngSeed |= 0; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; state.rngSeed = x; 
+    return (x >>> 0) / 4294967296;
+  }
+
+  // Reset game
+  function resetGame() {
+    state.running = true;
+    state.gameOver = false;
+    state.t = 0;
+    state.speed = 8;
+    state.coins = 0;
+    state.distance = 0;
+    state.obstacles.length = 0;
+    state.pickups.length = 0;
+    state.player.lane = 1;
+    state.player.y = 0; state.player.vy = 0;
+    state.player.isSliding = false; state.player.slideT = 0;
+  }
+
+  // Input handling (keyboard)
+  const key = { left:false, right:false, up:false, down:false };
+  addEventListener('keydown', (e) => {
+    if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"," ","Space"].includes(e.key)) e.preventDefault();
+    if (e.repeat) return;
+    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') moveLane(-1);
+    if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') moveLane(1);
+    if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') jump();
+    if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') slide();
+    if (e.key === ' ' || e.key === 'Space') {
+      if (!state.running && !state.gameOver) startGame();
+      else if (state.gameOver) { startGame(); }
+    }
+  }, {passive:false});
+
+  // Touch swipe handling
+  let touchStart = null;
+  canvas.addEventListener('pointerdown', (e) => { touchStart = {x:e.clientX, y:e.clientY, t:performance.now()}; });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!touchStart) return;
+    const dx = e.clientX - touchStart.x; const dy = e.clientY - touchStart.y; const dt = performance.now() - touchStart.t;
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    const swipe = (absX > 24 || absY > 24) && dt < 500;
+    if (swipe) {
+      if (absX > absY) moveLane(dx > 0 ? 1 : -1);
+      else { if (dy < 0) jump(); else slide(); }
+    } else {
+      // tap to start or restart
+      if (!state.running && !state.gameOver) startGame();
+      else if (state.gameOver) startGame();
+    }
+    touchStart = null;
+  });
+
+  function startGame() {
+    resetGame();
+    startOverlay.style.display = 'none';
+    gameOverEl.style.display = 'none';
+  }
+
+  function endGame() {
+    state.running = false; state.gameOver = true;
+    finalDistEl.textContent = Math.floor(state.distance);
+    finalCoinsEl.textContent = state.coins;
+    gameOverEl.style.display = 'grid';
+  }
+
+  document.getElementById('playBtn').onclick = startGame;
+  document.getElementById('howBtn').onclick = () => alert('Controls:\n• Swipe / ← → to change lanes\n• ↑ to jump\n• ↓ to slide');
+  document.getElementById('restartBtn').onclick = startGame;
+  document.getElementById('shareBtn').onclick = () => {
+    const txt = `I ran ${Math.floor(state.distance)}m and grabbed ${state.coins} coins in Giga Runners!`;
+    if (navigator.share) navigator.share({title:'Giga Runners', text:txt, url: location.href});
+    else navigator.clipboard.writeText(`${txt} ${location.href}`);
+    alert('Score copied to clipboard!');
+  };
+
+  function moveLane(dir) {
+    if (!state.running) return;
+    state.player.lane = Math.max(0, Math.min(state.lanes-1, state.player.lane + dir));
+  }
+  function jump() {
+    if (!state.running) return;
+    // Only jump if roughly on ground
+    if (Math.abs(state.player.y) < 2 && !state.player.isSliding) {
+      state.player.vy = -16; // jump impulse
+    }
+  }
+  function slide() {
+    if (!state.running) return;
+    if (!state.player.isSliding && Math.abs(state.player.y) < 2) {
+      state.player.isSliding = true; state.player.slideT = 0.45; // seconds
+    }
+  }
+
+  // Spawners
+  let spawnTimer = 0;
+  let coinTimer = 0;
+
+  function spawnObstacle() {
+    const lane = (rand()*3)|0;
+    const kind = rand() < 0.6 ? 'barrier' : 'overhang';
+    const w = state.laneW * 0.6;
+    const h = kind === 'barrier' ? 70 + rand()*60 : 30; // overhang is low ceiling
+    const y = kind === 'barrier' ? state.groundY - h : state.groundY - 140; // overhang at fixed height
+    state.obstacles.push({ x: canvas.width + 40, y, w, h, lane, kind });
+  }
+
+  function spawnCoinRow() {
+    const baseX = canvas.width + 40;
+    const lane = (rand()*3)|0;
+    const count = 4 + (rand()*4)|0;
+    for (let i=0;i<count;i++) {
+      state.pickups.push({ x: baseX + i*60, y: state.groundY - 110 - Math.sin(i)*6, r: 10, lane, kind:'coin' });
+    }
+  }
+
+  // Collision helper
+  function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  // Main loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000); last = now;
+
+    if (state.running) update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt) {
+    state.t += dt;
+    state.speed += state.accel * (1 + Math.min(2.2, state.t/20)); // gentle difficulty curve
+    state.distance += state.speed * dt * 2; // pretend meters
+
+    // Player physics
+    state.player.vy += 40 * dt; // gravity
+    state.player.y += state.player.vy;
+    if (state.player.y > 0) { state.player.y = 0; state.player.vy = 0; }
+
+    if (state.player.isSliding) {
+      state.player.slideT -= dt; if (state.player.slideT <= 0) state.player.isSliding = false;
+    }
+
+    // Spawn logic
+    spawnTimer -= dt; if (spawnTimer <= 0) {
+      spawnObstacle();
+      spawnTimer = Math.max(0.6, 1.4 - state.t*0.02) + rand()*0.4; // faster over time
+    }
+    coinTimer -= dt; if (coinTimer <= 0) {
+      spawnCoinRow();
+      coinTimer = 1.6 + rand()*1.0;
+    }
+
+    // Move and cull
+    const vx = -state.speed;
+    for (const o of state.obstacles) o.x += vx;
+    for (const p of state.pickups) p.x += vx;
+    state.obstacles = state.obstacles.filter(o => o.x > -200);
+    state.pickups = state.pickups.filter(p => p.x > -200);
+
+    // Player rect
+    const laneX = state.laneW * (state.player.lane + 0.5);
+    const pw = state.player.w;
+    const phBase = state.player.h;
+    const slideScale = state.player.isSliding ? 0.55 : 1.0;
+    const ph = phBase * slideScale;
+    const px = laneX - pw/2;
+    const py = state.groundY - ph + state.player.y;
+
+    // Collisions
+    for (const o of state.obstacles) {
+      const ox = state.laneW * (o.lane + 0.5) - o.w/2;
+      if (rectsOverlap(px, py, pw, ph, ox, o.y, o.w, o.h)) {
+        // Rules: barrier requires jump (collide if player's feet below top), overhang requires slide (collide if too tall)
+        if (o.kind === 'barrier') {
+          // On barrier, collide unless player is clearly above its top (y + ph <= o.y + 4)
+          if (py + ph > o.y + 4) { endGame(); break; }
+        } else {
+          // Overhang: collide if player's top enters overhang zone (py <= o.y + o.h)
+          if (py <= o.y + o.h - 2 && !state.player.isSliding) { endGame(); break; }
+        }
+      }
+    }
+
+    for (const p of state.pickups) {
+      if (p.kind === 'coin') {
+        const cx = state.laneW * (p.lane + 0.5) - 12; // a small rect for coin
+        if (rectsOverlap(px, py, pw, ph, cx, p.y-12, 24, 24)) {
+          p.collected = true; state.coins++;
+        }
+      }
+    }
+    state.pickups = state.pickups.filter(p => !p.collected);
+
+    // HUD update
+    hudCoins.textContent = state.coins;
+    hudDist.textContent = Math.floor(state.distance);
+  }
+
+  function render() {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+
+    // Background city parallax
+    drawBackground();
+
+    // Track
+    drawTrack();
+
+    // Entities
+    drawCoins();
+    drawObstacles();
+    drawPlayer();
+  }
+
+  function drawBackground() {
+    const w = canvas.width, h = canvas.height;
+    const t = state.t * state.speed * 4;
+
+    // Stars
+    ctx.globalAlpha = 0.5;
+    for (let i=0;i<60;i++) {
+      const x = (i*173 + t*0.02) % (w+100) - 50;
+      const y = (i*97 % (h*0.6));
+      ctx.fillStyle = i % 7 ? '#5e6aa8' : '#a6c8ff';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // Buildings layers
+    for (let layer=0; layer<3; layer++) {
+      const speed = [0.15, 0.3, 0.6][layer];
+      const baseY = h*0.5 + layer*14;
+      const col = ['#162038','#1a2542','#1d2a4c'][layer];
+      ctx.fillStyle = col;
+      for (let i=0;i<14;i++) {
+        const x = (i*200 - (state.t*state.speed*60*speed)%200) - 100;
+        const bw = 140 + (i%4)*20; const bh = 120 + (i%5)*30 + layer*20;
+        ctx.fillRect(x, baseY - bh, bw, bh);
+      }
+    }
+  }
+
+  function drawTrack() {
+    const w = canvas.width, h = canvas.height;
+    // Ground gradient
+    const g = ctx.createLinearGradient(0, h*0.65, 0, h);
+    g.addColorStop(0, '#121625');
+    g.addColorStop(1, '#0c0f1c');
+    ctx.fillStyle = g; ctx.fillRect(0, h*0.65, w, h*0.35);
+
+    // Lane separators moving perspective lines
+    const laneW = state.laneW;
+    for (let i=1;i<state.lanes;i++) {
+      ctx.fillStyle = 'rgba(255,255,255,.06)';
+      ctx.fillRect(i*laneW - 2, h*0.65, 4, h*0.35);
+    }
+
+    // Repeat road marks to suggest motion
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    for (let i=0;i<12;i++) {
+      const x = (i*120 - (state.t*state.speed*60)%120);
+      ctx.fillRect(x, state.groundY+8, 60, 8);
+    }
+  }
+
+  function drawPlayer() {
+    const laneX = state.laneW * (state.player.lane + 0.5);
+    const pw = state.player.w;
+    const phBase = state.player.h;
+    const slideScale = state.player.isSliding ? 0.55 : 1.0;
+    const ph = phBase * slideScale;
+    const px = laneX - pw/2;
+    const py = state.groundY - ph + state.player.y;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    const sh = 10 + Math.abs(state.player.y*0.4);
+    ctx.beginPath(); ctx.ellipse(laneX, state.groundY+4, 26, sh, 0, 0, Math.PI*2); ctx.fill();
+
+    // Body
+    const grad = ctx.createLinearGradient(px, py, px, py+ph);
+    grad.addColorStop(0, '#6fe0ff'); grad.addColorStop(1, '#2aa9d2');
+    ctx.fillStyle = grad;
+    roundRect(ctx, px, py, pw, ph, 14);
+    ctx.fill();
+
+    // Head
+    ctx.fillStyle = '#e8f7ff';
+    ctx.beginPath(); ctx.arc(px+pw/2, py+14, 10, 0, Math.PI*2); ctx.fill();
+
+    // Board
+    ctx.fillStyle = '#9b7bff';
+    roundRect(ctx, px-6, py+ph-8, pw+12, 8, 6); ctx.fill();
+  }
+
+  function drawObstacles() {
+    for (const o of state.obstacles) {
+      const ox = state.laneW * (o.lane + 0.5) - o.w/2;
+      const col = o.kind === 'barrier' ? '#ff6b6b' : '#ffc46b';
+      ctx.fillStyle = col;
+      roundRect(ctx, ox, o.y, o.w, o.h, 10); ctx.fill();
+      // hazard stripes
+      ctx.fillStyle = 'rgba(0,0,0,.2)';
+      for (let i=0;i<o.w;i+=16) ctx.fillRect(ox+i, o.y+4, 8, o.h-8);
+    }
+  }
+
+  function drawCoins() {
+    for (const p of state.pickups) if (p.kind==='coin') {
+      const cx = state.laneW * (p.lane + 0.5);
+      const t = state.t;
+      ctx.save();
+      ctx.translate(p.x + (cx - p.x), p.y);
+      const pulse = 1 + Math.sin(t*6 + p.x*0.05)*0.08;
+      ctx.scale(pulse, pulse);
+      // outer glow
+      ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2);
+      ctx.fillStyle = 'rgba(255,214,61,.25)'; ctx.fill();
+      // coin body
+      const g = ctx.createRadialGradient(-4,-4,2,0,0,14);
+      g.addColorStop(0,'#ffe88a'); g.addColorStop(1,'#ffb300');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+      // symbol
+      ctx.fillStyle = 'rgba(0,0,0,.25)';
+      ctx.fillRect(-2,-6,4,12); ctx.fillRect(-6,-2,12,4);
+      ctx.restore();
+    }
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    const min = Math.min(w,h)/2; r = Math.min(r, min);
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.lineTo(x+w-r, y);
+    ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r);
+    ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    ctx.lineTo(x+r, y+h);
+    ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    ctx.lineTo(x, y+r);
+    ctx.quadraticCurveTo(x, y, x+r, y);
+    ctx.closePath();
+  }
+
+  // Kick off
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
